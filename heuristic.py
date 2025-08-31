@@ -1,5 +1,6 @@
-# aggressive_heuristic.py
+# optimized_heuristic.py
 import numpy as np
+import random
 
 class SungkaHeuristic:
     def __init__(self, game):
@@ -53,7 +54,7 @@ class SungkaHeuristic:
             if current_hole not in (7, 15) and board[current_hole] > 1:
                 return distribute_from_hole(current_hole)
             
-            # Check for capture - FIXED: Use originally_empty from the ORIGINAL move
+            # Check for capture
             if ((current_player == 0 and 0 <= current_hole <= 6 and board[current_hole] == 1) or
                 (current_player == 1 and 8 <= current_hole <= 14 and board[current_hole] == 1)):
                 opposite_hole = 14 - current_hole
@@ -88,93 +89,83 @@ class SungkaHeuristic:
             'last_hole': last_hole
         }
 
-    def evaluate_board_position(self, game, board_after):
-        """Evaluate overall board position strength"""
+    def analyze_opponent_threats(self, game, board_after):
+        """Analyze immediate threats from opponent"""
         current_player = game.current_player
-        score = 0
+        opponent = 1 - current_player
+        threat_score = 0
         
-        # 1. Head advantage (most important)
-        if current_player == 0:
-            head_diff = board_after[7] - board_after[15]
-            own_stones = sum(board_after[0:7])
-            opponent_stones = sum(board_after[8:15])
-        else:
-            head_diff = board_after[15] - board_after[7]
-            own_stones = sum(board_after[8:15])
-            opponent_stones = sum(board_after[0:7])
-        
-        score += head_diff * 15  # Very high weight for head advantage
-        
-        # 2. Material advantage on board
-        material_diff = own_stones - opponent_stones
-        score += material_diff * 3
-        
-        # 3. Positional control - stones in key holes
-        if current_player == 0:
-            key_holes = [3, 4, 5]  # Center-right holes for Player 1
-            key_stones = sum(board_after[i] for i in key_holes)
-        else:
-            key_holes = [9, 10, 11]  # Center-left holes for Player 2
-            key_stones = sum(board_after[i] for i in key_holes)
-        
-        score += key_stones * 2
-        
-        # 4. Opponent mobility restriction
         opponent_range = range(8, 15) if current_player == 0 else range(0, 7)
-        opponent_moves = sum(1 for i in opponent_range 
-                           if board_after[i] > 0 and i not in game.burned_holes[1-current_player])
+        my_range = range(0, 7) if current_player == 0 else range(8, 15)
         
-        if opponent_moves <= 3:
-            score += (4 - opponent_moves) * 20  # Huge bonus for restricting opponent
-        
-        return score
-
-    def count_capture_opportunities(self, game, board):
-        """Count immediate capture opportunities"""
-        current_player = game.current_player
-        captures = 0
-        capture_value = 0
-        
-        own_range = range(0, 7) if current_player == 0 else range(8, 15)
-        
-        for hole in own_range:
-            if hole in game.burned_holes[current_player] or board[hole] == 0:
+        for opp_hole in opponent_range:
+            if board_after[opp_hole] == 0 or opp_hole in game.burned_holes[opponent]:
                 continue
                 
-            stones = board[hole]
-            # Simple landing calculation (ignoring burned holes for quick estimate)
-            landing = (hole + stones) % 14
-            if current_player == 1:
-                landing = max(0, landing - 8) + 8
+            stones = board_after[opp_hole]
+            
+            # Simple simulation of opponent's potential move
+            current_hole = opp_hole
+            temp_stones = stones
+            
+            while temp_stones > 0:
+                current_hole = (current_hole + 1) % 16
                 
-            if ((current_player == 0 and 0 <= landing <= 6) or
-                (current_player == 1 and 8 <= landing <= 14)):
-                if board[landing] == 0:  # Empty hole
-                    opposite = 14 - landing
-                    if board[opposite] > 0:
-                        captures += 1
-                        capture_value += board[opposite] + 1
+                # Skip our head
+                if (opponent == 0 and current_hole == 15) or (opponent == 1 and current_hole == 7):
+                    continue
+                    
+                temp_stones -= 1
+            
+            # Check what opponent could achieve
+            if ((opponent == 0 and current_hole == 7) or (opponent == 1 and current_hole == 15)):
+                threat_score -= 5  # Opponent gets extra turn
+            elif ((opponent == 0 and 0 <= current_hole <= 6) or 
+                  (opponent == 1 and 8 <= current_hole <= 14)):
+                opposite = 14 - current_hole
+                if board_after[current_hole] == 1 and board_after[opposite] > 0:
+                    threat_score -= board_after[opposite] * 2  # Opponent can capture
         
-        return captures, capture_value
+        return threat_score
 
-    def evaluate_endgame(self, game, board):
-        """Special evaluation for endgame positions"""
+    def evaluate_endgame_strategy(self, game, board_after):
+        """Enhanced endgame evaluation"""
         current_player = game.current_player
-        own_range = range(0, 7) if current_player == 0 else range(8, 15)
-        opponent_range = range(8, 15) if current_player == 0 else range(0, 7)
         
-        own_stones = sum(board[i] for i in own_range)
-        opponent_stones = sum(board[i] for i in opponent_range)
-        total_stones = own_stones + opponent_stones
+        if current_player == 0:
+            my_head = board_after[7]
+            opponent_head = board_after[15]
+            my_stones = sum(board_after[0:7])
+            opponent_stones = sum(board_after[8:15])
+        else:
+            my_head = board_after[15]
+            opponent_head = board_after[7]
+            my_stones = sum(board_after[8:15])
+            opponent_stones = sum(board_after[0:7])
         
-        if total_stones <= 15:  # Endgame threshold
-            # Focus on head advantage and clearing our side
-            head_diff = board[7] - board[15] if current_player == 0 else board[15] - board[7]
+        total_remaining = my_stones + opponent_stones
+        
+        if total_remaining <= 20:  # Endgame threshold
+            head_diff = my_head - opponent_head
             
-            # Bonus for having fewer stones on our side (easier to clear)
-            clear_bonus = max(0, (8 - own_stones)) * 5
+            # If we're ahead, prioritize clearing our side safely
+            if head_diff > 0:
+                clear_bonus = max(0, (15 - my_stones)) * 3
+                return head_diff * 15 + clear_bonus
             
-            return head_diff * 25 + clear_bonus
+            # If we're behind, prioritize gaining stones
+            elif head_diff < 0:
+                if my_stones > opponent_stones:
+                    # We have more stones to work with
+                    comeback_bonus = (my_stones - opponent_stones) * 5
+                    return head_diff * 15 + comeback_bonus
+                else:
+                    # Desperate situation
+                    return head_diff * 20
+            
+            # If tied, prioritize maintaining material advantage
+            else:
+                return (my_stones - opponent_stones) * 8
         
         return 0
 
@@ -188,59 +179,132 @@ class SungkaHeuristic:
             return -float('inf'), {"Error": "Invalid move"}
 
         board_after = result['board']
-        
-        # Core scoring components
         scores = {}
         
-        # 1. Immediate gains (captures and extra turns)
-        capture_score = result['total_captured'] * 25
-        extra_turn_score = result['extra_turns'] * 40
-        burn_penalty = result['burns_created'] * -15
+        # Calculate game progress
+        total_stones_on_board = sum(board_after[i] for i in range(16) if i not in (7, 15))
+        game_progress = 1 - (total_stones_on_board / 98)
+        
+        # 1. Immediate tactical gains
+        capture_score = result['total_captured'] * 12
+        extra_turn_score = result['extra_turns'] * 20
+        burn_penalty = result['burns_created'] * -30
         
         scores['Captures'] = capture_score
         scores['Extra Turns'] = extra_turn_score
         scores['Burn Penalty'] = burn_penalty
         
-        # 2. Positional evaluation
-        position_score = self.evaluate_board_position(game, board_after)
-        scores['Position'] = position_score
+        # 2. Strategic position evaluation
+        if current_player == 0:
+            my_head = board_after[7]
+            opponent_head = board_after[15]
+            my_stones = sum(board_after[0:7])
+            opponent_stones = sum(board_after[8:15])
+            my_range = range(0, 7)
+        else:
+            my_head = board_after[15]
+            opponent_head = board_after[7]
+            my_stones = sum(board_after[8:15])
+            opponent_stones = sum(board_after[0:7])
+            my_range = range(8, 15)
         
-        # 3. Future opportunities
-        capture_ops, capture_val = self.count_capture_opportunities(game, board_after)
-        opportunity_score = capture_ops * 8 + capture_val * 2
-        scores['Opportunities'] = opportunity_score
+        head_diff = my_head - opponent_head
+        material_diff = my_stones - opponent_stones
         
-        # 4. Endgame evaluation
-        endgame_score = self.evaluate_endgame(game, board_after)
-        scores['Endgame'] = endgame_score
+        # Dynamic scoring based on game phase
+        if game_progress < 0.3:  # Early game
+            scores['Head Advantage'] = head_diff * 8
+            scores['Material Control'] = material_diff * 3
+            
+            # Reward maintaining options
+            active_holes = sum(1 for i in my_range if board_after[i] > 0)
+            if active_holes >= 5:
+                scores['Development'] = 8
+            elif active_holes <= 2:
+                scores['Development'] = -15
+            else:
+                scores['Development'] = 0
+                
+        elif game_progress > 0.6:  # Late game
+            endgame_score = self.evaluate_endgame_strategy(game, board_after)
+            scores['Endgame Strategy'] = endgame_score
+            scores['Material Control'] = material_diff * 1
+            
+        else:  # Mid game
+            scores['Head Advantage'] = head_diff * 10
+            scores['Material Control'] = material_diff * 2
+            
+            # Mid-game tactical focus
+            active_holes = sum(1 for i in my_range if board_after[i] > 0)
+            if active_holes >= 3:
+                scores['Flexibility'] = 5
+            else:
+                scores['Flexibility'] = -8
         
-        # 5. Aggressive play bonus
-        aggressive_bonus = 0
+        # 3. Threat analysis
+        threat_score = self.analyze_opponent_threats(game, board_after)
+        scores['Threat Analysis'] = threat_score
+        
+        # 4. Move efficiency and quality
+        stones_used = game.board[hole]
+        efficiency_score = 0
+        
+        # Reward efficient captures and extra turns
         if result['total_captured'] > 0:
-            aggressive_bonus += 15  # Reward any capture
+            efficiency = result['total_captured'] / max(1, stones_used)
+            efficiency_score += efficiency * 8
+        
         if result['extra_turns'] > 0:
-            aggressive_bonus += 20  # Reward extra turns
+            if stones_used <= 6:
+                efficiency_score += 6  # Efficient extra turn
+            else:
+                efficiency_score += 2  # Less efficient but still good
         
-        scores['Aggression'] = aggressive_bonus
+        # Penalty for wasteful large moves
+        if stones_used > 12 and result['total_captured'] == 0 and result['extra_turns'] == 0:
+            efficiency_score -= 8
         
-        # 6. Risk assessment
-        risk_penalty = 0
-        own_range = range(0, 7) if current_player == 0 else range(8, 15)
-        stones_after_move = sum(board_after[i] for i in own_range)
+        scores['Move Efficiency'] = efficiency_score
         
-        # Penalty for leaving too few options
-        if stones_after_move <= 3:
-            available_moves = sum(1 for i in own_range if board_after[i] > 0)
-            if available_moves <= 2:
-                risk_penalty = -30
+        # 5. Advanced tactical considerations
+        tactical_score = 0
         
-        scores['Risk'] = risk_penalty
+        # Count immediate capture opportunities after this move
+        immediate_captures = 0
+        for next_hole in my_range:
+            if board_after[next_hole] == 0 or next_hole in game.burned_holes[current_player]:
+                continue
+            next_stones = board_after[next_hole]
+            landing = (next_hole + next_stones) % 16
+            
+            # Adjust for player boundaries
+            if current_player == 1 and landing < 8:
+                continue
+            if current_player == 0 and landing > 6 and landing != 7:
+                continue
+                
+            if ((current_player == 0 and 0 <= landing <= 6) or
+                (current_player == 1 and 8 <= landing <= 14)):
+                if board_after[landing] == 0:
+                    opposite = 14 - landing
+                    if board_after[opposite] > 0:
+                        immediate_captures += 1
+                        tactical_score += board_after[opposite] * 0.5
+        
+        scores['Tactical Setup'] = tactical_score
+        
+        # 6. Randomization for mirror matches (prevent deterministic loops)
+        if game_progress > 0.1:  # Don't randomize too early
+            randomization = random.uniform(-2, 2)
+            scores['Variation'] = randomization
+        else:
+            scores['Variation'] = 0
         
         # Total score calculation
         total_score = sum(scores.values())
         
-        # Add original stones for context
-        scores['Stones Used'] = game.board[hole]
+        # Add context info
+        scores['Stones Used'] = stones_used
         scores['Total Score'] = total_score
         
         return total_score, scores
