@@ -152,16 +152,35 @@ class SungkaGame:
             return sum(self.board[8:15]) == 0
 
     def collect_remaining_stones(self):
-        if self.current_player == 0:
-            remaining = sum(self.board[8:15])
-            self.board[15] += remaining
+        """
+        Collect remaining stones when game ends:
+        - If Player 1's side (0-6) is empty: Player 2 gets all remaining stones from their side (8-14)
+        - If Player 2's side (8-14) is empty: Player 1 gets all remaining stones from their side (0-6)
+        """
+        player1_stones = sum(self.board[0:7])
+        player2_stones = sum(self.board[8:15])
+        
+        if player1_stones == 0 and player2_stones > 0:
+            # Player 1's side is empty, Player 2 gets their remaining stones
+            self.board[15] += player2_stones
             for i in range(8, 15):
                 self.board[i] = 0
-        else:
-            remaining = sum(self.board[0:7])
-            self.board[7] += remaining
+            print(f"Player 1's side is empty. Player 2 collects {player2_stones} remaining stones.")
+            
+        elif player2_stones == 0 and player1_stones > 0:
+            # Player 2's side is empty, Player 1 gets their remaining stones
+            self.board[7] += player1_stones
             for i in range(0, 7):
                 self.board[i] = 0
+            print(f"Player 2's side is empty. Player 1 collects {player1_stones} remaining stones.")
+            
+        elif player1_stones == 0 and player2_stones == 0:
+            # Both sides empty (shouldn't normally happen, but just in case)
+            print("Both sides are empty. No stones to collect.")
+            
+        else:
+            # This shouldn't happen in normal game flow, but handle it
+            print(f"Warning: collect_remaining_stones called but both sides have stones (P1: {player1_stones}, P2: {player2_stones})")
 
     def get_valid_moves(self, player):
         valid_moves = []

@@ -293,10 +293,16 @@ class SungkaHeuristic:
         
         scores['Tactical Setup'] = tactical_score
         
-        # 6. Randomization for mirror matches (prevent deterministic loops)
-        if game_progress > 0.1:  # Don't randomize too early
-            randomization = random.uniform(-2, 2)
-            scores['Variation'] = randomization
+        # 6. FIXED: Deterministic variation instead of random
+        # This prevents asymmetry in mirror matches
+        if game_progress > 0.1:
+            # Use board state and hole position to create deterministic variation
+            board_hash = hash(tuple(board_after)) 
+            position_factor = hole * 13  # Prime number for better distribution
+            deterministic_seed = (board_hash + position_factor) % 10000
+            # Convert to -2 to +2 range deterministically
+            deterministic_variation = ((deterministic_seed / 10000) - 0.5) * 4
+            scores['Variation'] = deterministic_variation
         else:
             scores['Variation'] = 0
         
