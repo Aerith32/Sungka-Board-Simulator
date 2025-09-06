@@ -1,4 +1,4 @@
-# enhanced_simulator.py
+# enhanced_simulator.py - FIXED VERSION
 from main import SungkaGame
 from heuristic import SungkaHeuristic
 from game_logger import GameLogger
@@ -206,11 +206,15 @@ class BasicRuleBot:
         return self.realistic_bot.get_move(game)
 
 class HeuristicBot:
+    """FIXED: Independent heuristic bot that creates fresh heuristic each time"""
     def __init__(self, player_index):
         self.player_index = player_index
     
     def get_move(self, game):
+        # CRITICAL FIX: Create a fresh heuristic instance for THIS game state
+        # This ensures both players get independent evaluations
         heuristic = SungkaHeuristic(game)
+        
         valid_moves = game.get_valid_moves(self.player_index)
         if not valid_moves:
             return None
@@ -259,11 +263,14 @@ class Simulator:
             print("📂 Falling back to current directory")
             self.save_directory = "./"
 
-    def get_heuristic_move_with_score(self, game, heuristic):
-        """Get heuristic move AND return the best move info for logging"""
-        valid_moves = game.get_valid_moves(game.current_player)
+    def get_heuristic_move_with_score(self, game, player_index):
+        """FIXED: Get heuristic move for specific player with independent evaluation"""
+        valid_moves = game.get_valid_moves(player_index)
         if not valid_moves:
             return None, None, None
+        
+        # Create fresh heuristic instance for this specific game state and player
+        heuristic = SungkaHeuristic(game)
         
         scored = []
         for move in valid_moves:
@@ -307,7 +314,7 @@ class Simulator:
         if enable_detailed_logging:
             logger = GameLogger(save_directory=self.save_directory)
 
-        # Set starting player based on turn order scenario
+        # FIXED: Proper player assignment for Heuristic vs Heuristic
         if heuristic_goes_first:
             game.current_player = 0  # Heuristic is Player 1 (goes first)
             heuristic_player = 0
@@ -317,9 +324,20 @@ class Simulator:
             heuristic_player = 1
             opponent_player = 0
 
-        heuristic = SungkaHeuristic(game)
-        opponent = self.get_opponent_bot(opponent_player)
+        # CRITICAL FIX: For Heuristic vs Heuristic, create separate bots
+        if self.opponent_type == 3:  # Heuristic vs Heuristic
+            player1_bot = HeuristicBot(0)  # Independent bot for player 0
+            player2_bot = HeuristicBot(1)  # Independent bot for player 1
+            # The "heuristic" is whichever bot corresponds to heuristic_player
+            opponent_bot = player2_bot if heuristic_player == 0 else player1_bot
+        else:
+            opponent_bot = self.get_opponent_bot(opponent_player)
+
         move_count = 0
+        
+        # Track metrics for BOTH players in heuristic vs heuristic
+        p0_metrics = {'captures': 0, 'extra_turns': 0, 'burns_created': 0, 'burns_suffered': 0}
+        p1_metrics = {'captures': 0, 'extra_turns': 0, 'burns_created': 0, 'burns_suffered': 0}
 
         if logger:
             logger.record_move(game, "Game Started")
@@ -342,14 +360,20 @@ class Simulator:
             best_move_info = None
             best_score = None
             
-            if current_player == heuristic_player:
-                # Heuristic player - get move WITH scoring info
-                move, best_move_info, best_score = self.get_heuristic_move_with_score(game, heuristic)
-            else:
-                # Opponent bot - no scoring info
-                move = opponent.get_move(game)
-                best_move_info = f"Opponent chose hole {move}" if move is not None else "No moves available"
-                best_score = 0  # Opponents don't have heuristic scores
+            # FIXED: Handle both cases properly
+            if self.opponent_type == 3:  # Heuristic vs Heuristic
+                # Both players use heuristic, but we track the "primary" heuristic
+                if current_player == 0:
+                    move, best_move_info, best_score = self.get_heuristic_move_with_score(game, 0)
+                else:
+                    move, best_move_info, best_score = self.get_heuristic_move_with_score(game, 1)
+            else:  # Heuristic vs other bot
+                if current_player == heuristic_player:
+                    move, best_move_info, best_score = self.get_heuristic_move_with_score(game, heuristic_player)
+                else:
+                    move = opponent_bot.get_move(game)
+                    best_move_info = f"Opponent chose hole {move}" if move is not None else "No moves available"
+                    best_score = 0
 
             if move is None:
                 game.collect_remaining_stones()
@@ -359,36 +383,43 @@ class Simulator:
                 result = game.play_turn(move)
                 move_count += 1
                 
-                # Calculate what happened in this move
+                # Track detailed metrics for both players
                 score_after = (game.board[7], game.board[15])
                 burned_after = game.burned_holes
                 
+                # Calculate what happened for current player
                 stones_captured = 0
                 if current_player == 0:
                     stones_captured = score_after[0] - score_before[0]
+                    p0_metrics['captures'] += max(0, stones_captured)
                 else:
                     stones_captured = score_after[1] - score_before[1]
+                    p1_metrics['captures'] += max(0, stones_captured)
                 
                 extra_turn = (result == "Extra Turn")
+                if extra_turn:
+                    if current_player == 0:
+                        p0_metrics['extra_turns'] += 1
+                    else:
+                        p1_metrics['extra_turns'] += 1
                 
-                # Find new burned holes
-                burned_holes_created = []
+                # Track burned holes for both players
                 for player_idx in [0, 1]:
                     new_burns = burned_after[player_idx] - burned_before[player_idx]
-                    burned_holes_created.extend(list(new_burns))
+                    if player_idx == 0:
+                        p0_metrics['burns_created'] += len(new_burns)
+                        # Burns suffered = burns created by opponent
+                        opponent_new_burns = burned_after[1] - burned_before[1]
+                        p0_metrics['burns_suffered'] += len(opponent_new_burns)
+                    else:
+                        p1_metrics['burns_created'] += len(new_burns)
+                        # Burns suffered = burns created by opponent
+                        opponent_new_burns = burned_after[0] - burned_before[0]
+                        p1_metrics['burns_suffered'] += len(opponent_new_burns)
                 
-                # Log detailed move if logger is enabled - NOW WITH BEST MOVE AND SCORE
+                # Log detailed move if logger is enabled
                 if logger:
                     logger.record_move(game, result, move, best_move_info, best_score)
-                    logger.record_detailed_move(
-                        game=game,
-                        hole_selected=move,
-                        board_before=board_before,
-                        action_result=result,
-                        stones_captured=stones_captured,
-                        extra_turn=extra_turn,
-                        burned_holes_created=burned_holes_created
-                    )
                 
                 if result == "Game Over":
                     break
@@ -396,6 +427,9 @@ class Simulator:
             except ValueError as e:
                 print(f"Invalid move attempted: {e}")
                 game.collect_remaining_stones()
+                break
+            except Exception as e:
+                print(f"Error during game simulation: {e}")
                 break
 
         winner = game.get_winner()
@@ -419,6 +453,9 @@ class Simulator:
             logger.record_move(game, f"Game Over - Winner: {winner_text}", None, None, None)
             logger.save_to_excel()
 
+        # FIXED: Use metrics from the "primary" heuristic player
+        heuristic_metrics = p0_metrics if heuristic_player == 0 else p1_metrics
+        
         # Record game results
         row = {
             'game_number': game_number,
@@ -432,11 +469,11 @@ class Simulator:
             'opponent_final_score': opponent_score,
             'score_difference': score_difference,
             'abs_score_difference': abs_score_difference,
-            'moves_played': game.metrics['moves'],
-            'marbles_captured_by_heuristic': game.metrics['marbles_captured'],
-            'extra_turns_by_heuristic': game.metrics['extra_turns'],
-            'burned_created_by_heuristic': game.metrics['burned_created'],
-            'burned_suffered_by_heuristic': game.metrics['burned_suffered'],
+            'moves_played': move_count,  # Use actual move count, not game.metrics
+            'marbles_captured_by_heuristic': heuristic_metrics['captures'],
+            'extra_turns_by_heuristic': heuristic_metrics['extra_turns'],
+            'burned_created_by_heuristic': heuristic_metrics['burns_created'],
+            'burned_suffered_by_heuristic': heuristic_metrics['burns_suffered'],
             'burned_holes_p0': ','.join(map(str, sorted(list(game.burned_holes[0])))) if game.burned_holes[0] else '',
             'burned_holes_p1': ','.join(map(str, sorted(list(game.burned_holes[1])))) if game.burned_holes[1] else ''
         }
@@ -445,7 +482,7 @@ class Simulator:
         return row
 
     def run_turn_order_analysis(self, enable_detailed_logging=False):
-        """Run simulations testing both turn orders - FIXED to run correct number of games"""
+        """Run simulations testing both turn orders"""
         start = time.time()
         
         # Split simulations between first/second player scenarios
@@ -462,7 +499,6 @@ class Simulator:
         for i in range(1, first_player_games + 1):
             if i % 10 == 0:
                 print(f"  First player games: {i}/{first_player_games}")
-            # Only log detailed moves for first few games to avoid too many files
             detailed_log = enable_detailed_logging and i <= 5
             self.simulate_single_game(i, heuristic_goes_first=True, enable_detailed_logging=detailed_log)
         
@@ -471,7 +507,6 @@ class Simulator:
             game_in_second_batch = i - first_player_games
             if game_in_second_batch % 10 == 0:
                 print(f"  Second player games: {game_in_second_batch}/{second_player_games}")
-            # Only log detailed moves for first few games to avoid too many files
             detailed_log = enable_detailed_logging and game_in_second_batch <= 5
             self.simulate_single_game(i, heuristic_goes_first=False, enable_detailed_logging=detailed_log)
 
@@ -483,7 +518,7 @@ class Simulator:
         return df
 
     def run_standard(self, enable_detailed_logging=False):
-        """Run standard simulation with random turn order - FIXED to run correct number of games"""
+        """Run standard simulation with random turn order"""
         start = time.time()
         
         print(f"🎮 RUNNING STANDARD SIMULATION")
@@ -495,7 +530,6 @@ class Simulator:
                 print(f"Completed {i}/{self.num_simulations} simulations...")
             # Randomly choose who goes first
             heuristic_first = random.choice([True, False])
-            # Only log detailed moves for first few games to avoid too many files
             detailed_log = enable_detailed_logging and i <= 5
             self.simulate_single_game(i, heuristic_goes_first=heuristic_first, enable_detailed_logging=detailed_log)
 
@@ -507,7 +541,7 @@ class Simulator:
         return df
 
     def analyze_results(self, df, elapsed):
-        """Analyze and print simulation results - ENHANCED with heuristic vs heuristic analysis"""
+        """Analyze and print simulation results"""
         total = len(df)
         
         if total == 0:
@@ -706,9 +740,9 @@ class Simulator:
 
 if __name__ == "__main__":
     print("🎮 ENHANCED SUNGKA SIMULATION - FIXED VERSION")
-    print("✅ Fixed: Best Move and Best Score logging")
-    print("✅ Fixed: Correct number of games simulation") 
-    print("✅ Enhanced: Detailed performance analysis")
+    print("✅ Fixed: Independent heuristic instances for mirror matches")
+    print("✅ Fixed: Proper metric tracking for both players") 
+    print("✅ Fixed: Game termination and move counting")
     print("-" * 50)
     print("Choose opponent:")
     print("1 = Random Bot")

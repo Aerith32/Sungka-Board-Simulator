@@ -1,10 +1,13 @@
-# optimized_heuristic.py
+# completely_fixed_heuristic.py
 import numpy as np
 import random
+import hashlib
 
 class SungkaHeuristic:
     def __init__(self, game):
         self.original_game = game
+        # Add instance-specific randomization to break determinism
+        self.instance_id = random.randint(1, 1000000)
 
     def simulate_move_complete(self, game, hole):
         """Complete move simulation with proper burned hole handling and relay"""
@@ -96,7 +99,6 @@ class SungkaHeuristic:
         threat_score = 0
         
         opponent_range = range(8, 15) if current_player == 0 else range(0, 7)
-        my_range = range(0, 7) if current_player == 0 else range(8, 15)
         
         for opp_hole in opponent_range:
             if board_after[opp_hole] == 0 or opp_hole in game.burned_holes[opponent]:
@@ -111,8 +113,12 @@ class SungkaHeuristic:
             while temp_stones > 0:
                 current_hole = (current_hole + 1) % 16
                 
-                # Skip our head
+                # Skip current player's head (opponent's perspective)
                 if (opponent == 0 and current_hole == 15) or (opponent == 1 and current_hole == 7):
+                    continue
+                    
+                # Skip burned holes
+                if current_hole in game.burned_holes[0] or current_hole in game.burned_holes[1]:
                     continue
                     
                 temp_stones -= 1
@@ -169,6 +175,36 @@ class SungkaHeuristic:
         
         return 0
 
+    def get_strategic_variation(self, board_after, hole, game_progress, move_number=0):
+        """
+        COMPLETELY REWRITTEN: Generate truly random variation to break determinism
+        This adds controlled randomness to prevent identical games
+        """
+        if game_progress <= 0.1:
+            return 0.0
+        
+        # Use multiple sources of variation
+        base_random = random.random() * 4 - 2  # -2 to +2 range
+        
+        # Add small positional bias to prevent completely random play
+        current_player = self.original_game.current_player
+        if current_player == 0:
+            relative_hole_pos = hole  # 0-6
+        else:
+            relative_hole_pos = hole - 8  # Normalize to 0-6 range
+        
+        # Small positional preference (much smaller than base random)
+        positional_bias = (relative_hole_pos - 3) * 0.1  # Small bias toward middle holes
+        
+        # Game progress influence
+        progress_factor = game_progress * 0.5
+        
+        # Combine factors
+        total_variation = base_random + positional_bias + progress_factor
+        
+        # Clamp to reasonable range
+        return max(-3, min(3, total_variation))
+
     def evaluate_move_verbose(self, hole):
         game = self.original_game
         current_player = game.current_player
@@ -217,7 +253,7 @@ class SungkaHeuristic:
             scores['Material Control'] = material_diff * 3
             
             # Reward maintaining options
-            active_holes = sum(1 for i in my_range if board_after[i] > 0)
+            active_holes = sum(1 for i in my_range if board_after[i] > 0 and i not in game.burned_holes[current_player])
             if active_holes >= 5:
                 scores['Development'] = 8
             elif active_holes <= 2:
@@ -235,7 +271,7 @@ class SungkaHeuristic:
             scores['Material Control'] = material_diff * 2
             
             # Mid-game tactical focus
-            active_holes = sum(1 for i in my_range if board_after[i] > 0)
+            active_holes = sum(1 for i in my_range if board_after[i] > 0 and i not in game.burned_holes[current_player])
             if active_holes >= 3:
                 scores['Flexibility'] = 5
             else:
@@ -272,39 +308,44 @@ class SungkaHeuristic:
         # Count immediate capture opportunities after this move
         immediate_captures = 0
         for next_hole in my_range:
-            if board_after[next_hole] == 0 or next_hole in game.burned_holes[current_player]:
+            if (board_after[next_hole] == 0 or 
+                next_hole in game.burned_holes[current_player]):
                 continue
-            next_stones = board_after[next_hole]
-            landing = (next_hole + next_stones) % 16
             
-            # Adjust for player boundaries
-            if current_player == 1 and landing < 8:
-                continue
-            if current_player == 0 and landing > 6 and landing != 7:
-                continue
+            next_stones = board_after[next_hole]
+            current_sim_hole = next_hole
+            temp_stones = next_stones
+            
+            # Simulate the move
+            while temp_stones > 0:
+                current_sim_hole = (current_sim_hole + 1) % 16
                 
-            if ((current_player == 0 and 0 <= landing <= 6) or
-                (current_player == 1 and 8 <= landing <= 14)):
-                if board_after[landing] == 0:
-                    opposite = 14 - landing
+                # Skip opponent's head
+                if ((current_player == 0 and current_sim_hole == 15) or
+                    (current_player == 1 and current_sim_hole == 7)):
+                    continue
+                    
+                # Skip burned holes
+                if (current_sim_hole in game.burned_holes[0] or 
+                    current_sim_hole in game.burned_holes[1]):
+                    continue
+                    
+                temp_stones -= 1
+            
+            # Check if we can capture
+            if ((current_player == 0 and 0 <= current_sim_hole <= 6) or
+                (current_player == 1 and 8 <= current_sim_hole <= 14)):
+                if board_after[current_sim_hole] == 0:
+                    opposite = 14 - current_sim_hole
                     if board_after[opposite] > 0:
                         immediate_captures += 1
                         tactical_score += board_after[opposite] * 0.5
         
         scores['Tactical Setup'] = tactical_score
         
-        # 6. FIXED: Deterministic variation instead of random
-        # This prevents asymmetry in mirror matches
-        if game_progress > 0.1:
-            # Use board state and hole position to create deterministic variation
-            board_hash = hash(tuple(board_after)) 
-            position_factor = hole * 13  # Prime number for better distribution
-            deterministic_seed = (board_hash + position_factor) % 10000
-            # Convert to -2 to +2 range deterministically
-            deterministic_variation = ((deterministic_seed / 10000) - 0.5) * 4
-            scores['Variation'] = deterministic_variation
-        else:
-            scores['Variation'] = 0
+        # 6. FIXED: Add controlled randomness to break determinism
+        variation = self.get_strategic_variation(board_after, hole, game_progress)
+        scores['Strategic Variation'] = variation
         
         # Total score calculation
         total_score = sum(scores.values())
@@ -313,4 +354,4 @@ class SungkaHeuristic:
         scores['Stones Used'] = stones_used
         scores['Total Score'] = total_score
         
-        return total_score, scores
+        return total_score, scores  
